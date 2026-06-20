@@ -227,7 +227,11 @@ jobs:
           echo "NUGET_API_KEY not set — skipping the nuget.org mirror"
         fi
 
-  # ── release: TAG-ONLY multi-arch barkd image build + push to the in-cluster registry ──
+  # ── release: barkd image build — its OWN tag `barkd-v*` (decoupled from the package) ──
+  # The barkd binary version (e.g. 0.2.5) is a DIFFERENT cadence from the Sluice package
+  # version (the VERSION file), so the image is released on a separate `barkd-v<binver>`
+  # tag — a package `v*` tag does NOT build an image. Needs SLUICE_REGISTRY (CI var/secret).
+  #
   # The gVisor `ariel` runner that runs validate/test/publish CANNOT build images (no
   # docker/buildx/cluster access), so this runs on the privileged HOST runner
   # `dgx-deploy` — a systemd ci-runner with docker + a shared
@@ -236,14 +240,14 @@ jobs:
   #
   # The image contains NO bark source: the Dockerfile downloads + SHA256-verifies the
   # official upstream barkd release binary at build time (see deploy/barkd/Dockerfile
-  # + NOTICE). The image tag = the git tag minus the leading 'v' (v0.2.5 -> 0.2.5).
+  # + NOTICE). Image tag = git tag minus 'barkd-v' (barkd-v0.2.5 -> 0.2.5).
   build-barkd-image:
     stage: release
     runs-on: dgx-deploy
     needs: [test]
     rules:
       tags:
-        - v*
+        - barkd-v*
     timeout: 3600
     variables:
       KUBECONFIG: /etc/rancher/k3s/k3s.yaml
@@ -256,8 +260,8 @@ jobs:
           case "$GITHUB_REF" in refs/tags/*) TAG="${GITHUB_REF#refs/tags/}" ;; esac
         fi
         case "$TAG" in
-          v*) TAG="${TAG#v}" ;;
-          *) echo "build-barkd-image refused non-v* ref '$TAG'" >&2; exit 1 ;;
+          barkd-v*) TAG="${TAG#barkd-v}" ;;
+          *) echo "build-barkd-image refused non-'barkd-v*' ref '$TAG'" >&2; exit 1 ;;
         esac
         REG="${SLUICE_REGISTRY:?SLUICE_REGISTRY required — set the in-cluster registry endpoint as a CI variable/secret}"
         echo "building + pushing barkd:$TAG (multi-arch)"
