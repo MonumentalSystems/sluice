@@ -1,5 +1,9 @@
 # sluice
 
+[![NuGet](https://img.shields.io/nuget/v/Sluice.svg)](https://www.nuget.org/packages/Sluice/)
+[![Downloads](https://img.shields.io/nuget/dt/Sluice.svg)](https://www.nuget.org/packages/Sluice/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Self-hostable **Ark + Lightning** payment primitives. sluice is two independent
 artifacts:
 

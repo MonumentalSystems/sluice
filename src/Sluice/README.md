@@ -1,5 +1,9 @@
 # Sluice
 
+[![NuGet](https://img.shields.io/nuget/v/Sluice.svg)](https://www.nuget.org/packages/Sluice/)
+[![Downloads](https://img.shields.io/nuget/dt/Sluice.svg)](https://www.nuget.org/packages/Sluice/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/MonumentalSystems/sluice/blob/master/LICENSE)
+
 Ark/Lightning payment primitives:
 
 - **barkd REST client** (`IBarkdClient` / `BarkdClient`) — creates invoices, polls settlement, reads balance, lists lightning movements against bark's `barkd` daemon.
