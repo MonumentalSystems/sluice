@@ -1,0 +1,31 @@
+<Project>
+
+  <!-- Shared MSBuild properties for every .NET project in the repo. Dependency
+       VERSIONS live in Directory.Packages.props (Central Package Management);
+       this file carries the shared build knobs + NuGet pack metadata. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- Don't pack anything by default; the publishable libraries opt in with
+         <IsPackable>true</IsPackable> (tests/test-host projects stay off). -->
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <!-- Shared NuGet package metadata + version. The version is read from the
+       repo-root VERSION file so it's the single source of truth in-sandbox
+       (CI checkouts have no git tags, so MinVer can't derive it); the CI
+       publish stage may still override with -p:Version=$VERSION. -->
+  <PropertyGroup>
+    <Version Condition="'$(Version)' == '' AND Exists('$(MSBuildThisFileDirectory)VERSION')">$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)VERSION').Trim())</Version>
+    <Authors>Monumental Systems</Authors>
+    <Company>Monumental Systems</Company>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/MonumentalSystems/sluice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/MonumentalSystems/sluice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>ark;lightning;bitcoin;nostr;nwc;nip-47;nip-44;bolt11;lnurl;barkd</PackageTags>
+  </PropertyGroup>
+
+</Project>

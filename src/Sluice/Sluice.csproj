@@ -1,21 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
     <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
     <IsPackable>true</IsPackable>
 
-    <!-- NuGet pack metadata. Version is NOT hardcoded: MinVer stamps it from the nearest `v*` git tag
-         at pack time (this repo is git-less for now; MinVer falls back to a height-based prerelease). -->
+    <!-- Pack metadata. Version + shared fields (Authors/Company/License/Repository)
+         come from Directory.Build.props (the repo-root VERSION file is the source of truth). -->
     <PackageId>Sluice</PackageId>
-    <MinVerTagPrefix>v</MinVerTagPrefix>
-    <Authors>Monumental Systems</Authors>
-    <Company>Monumental Systems</Company>
     <Description>Ark/Lightning payment primitives: barkd REST client, BOLT11 parsing, LNURL-pay receive surface, and the NIP-47 (Nostr Wallet Connect) bridge with NIP-44 v2 crypto. Wallet-runtime lives in the barkd pod; this library creates invoices, polls settlement, reads balance, and bridges over nostr.</Description>
-    <RepositoryUrl>https://github.com/MonumentalSystems/sluice</RepositoryUrl>
-    <RepositoryType>git</RepositoryType>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
@@ -33,9 +24,6 @@
     <PackageReference Include="Microsoft.Extensions.Configuration.Binder" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Options" />
-
-    <!-- Build-time only: stamps the package version from the git tag (PrivateAssets=all ⇒ never flows to consumers). -->
-    <PackageReference Include="MinVer" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>

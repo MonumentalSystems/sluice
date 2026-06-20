@@ -1,0 +1,42 @@
+# Code-coverage workflow for sluice on gnostr-cloud (uranus).
+# Native first-party (GitLab-style) schema — top-level `stages` + `jobs`, NO
+# GitHub-Actions name:/on:/steps:/container: keys (the native executor rejects
+# those). Runs in the `ariel` gVisor ci-runner pod (ships the .NET 10 SDK), so
+# there is no container image to pull.
+#
+# All the logic lives in scripts/ci/coverage-run.sh, which:
+#   * runs `dotnet test --collect "XPlat Code Coverage"` (coverlet -> cobertura),
+#   * adapts it into the /coverage {filename,summary,segments} report shape,
+#   * emits the `##gnostr-cloud-coverage:NN.NN##` wall-badge marker on stdout
+#     (fills the CI "COVERAGE" column), and
+#   * POSTs the report + packed sources to /api/ci/coverage/upload (the host +
+#     per-job upload token are injected by the runner agent's context env).
+#
+# Manual-trigger only — `.gnostr-cloud-coverage.yml` is ignored by the auto-poller
+# (which only discovers `.gnostr-cloud-ci.yml`), so trigger with:
+#   NOSTR_PRIVATE_KEY=$(tr -d '\n' < <owner-nsec.hex>) \
+#     gnostr-cloud-cli ci enqueue \
+#       <OWNER_HEX>/sluice \
+#       --workflow .gnostr-cloud-coverage.yml --runs-on ariel \
+#       --host <RUNNER_HOST_HEX>
+
+stages:
+  - coverage
+
+variables:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  coverage:
+    stage: coverage
+    runs-on: ariel
+    script:
+      - |
+        set -e
+        export GITHUB_WORKSPACE="$PWD"
+        export HOME=/tmp DOTNET_CLI_HOME=/tmp NUGET_PACKAGES=/tmp/nuget \
+               DOTNET_ROOT=/usr/local/dotnet \
+               PATH="/usr/local/dotnet:/usr/local/bin:$PATH"
+        echo "dotnet: $(dotnet --version 2>&1 | head -1)"
+        bash scripts/ci/coverage-run.sh

@@ -7,16 +7,18 @@
 # `ariel` gVisor runner, which ships a .NET 10 SDK natively (no `container:` image
 # needed). The release job runs on the privileged HOST runner `dgx-deploy`.
 #
-# Three CI stages:
+# Four CI stages:
 #
 # Stages:
 #   validate (ariel)     format -> build -> test. The `test` job runs only the FAST non-integration
 #                        subset (--filter "Speed!=Slow") as a hard per-push gate. The "Slow" tests
 #                        (Testcontainers / live-barkd integration, tagged [Trait("Speed","Slow")]) are
 #                        NOT run here.
-#   publish (ariel)      TAG-ONLY. A pre-publish SECRET-SCAN gate, then NuGet pack of BOTH
-#                        src/Sluice + src/Sluice.TestKit (MinVer stamps the version from
-#                        the v* tag) + push to the uranus feed.
+#   pack (ariel)         Packs Sluice + Sluice.TestKit on EVERY push (version from the repo-root
+#                        VERSION file via Directory.Build.props) — proves packaging without publishing.
+#   publish (ariel)      TAG-ONLY. A pre-publish SECRET-SCAN gate, then NuGet push of Sluice +
+#                        Sluice.TestKit (version = the VERSION file) to the uranus feed, mirrored to
+#                        public nuget.org when NUGET_API_KEY is set.
 #   release (dgx-deploy) TAG-ONLY multi-arch barkd image build + push to the in-cluster registry. Runs
 #                        on the privileged HOST runner (docker + buildx + kubeconfig) because the gVisor
 #                        ariel runner cannot build images. The dgx-deploy runner agent must be a
@@ -37,6 +39,7 @@
 
 stages:
   - validate
+  - pack
   - publish
   - release
 
@@ -116,6 +119,30 @@ jobs:
           --filter "Speed!=Slow" \
           --logger "console;verbosity=minimal"
 
+  # ── pack: prove packaging on EVERY push (no publish) ─────────────────────────
+  # Packs the publishable libs (Sluice + Sluice.TestKit) on every master push and
+  # on a v* tag. Version comes from the repo-root VERSION file via
+  # Directory.Build.props (the in-sandbox source of truth — CI checkouts have no
+  # git tags). Catches a broken nuspec/metadata before a tag ever publishes.
+  pack:
+    stage: pack
+    runs-on: ariel
+    needs: [test]
+    rules:
+      branches:
+        - master
+      tags:
+        - v*
+    script:
+      - |
+        set -e
+        export HOME=/tmp DOTNET_CLI_HOME=/tmp NUGET_PACKAGES=/tmp/nuget \
+               DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
+               DOTNET_ROOT=/usr/local/dotnet \
+               PATH="/usr/local/dotnet:/usr/local/bin:$PATH"
+        dotnet pack Sluice.slnx -c Release -m:1 -o ./artifacts
+        ls -la ./artifacts
+
   # ── publish: pre-publish SECRET SCAN ─────────────────────────────────────────
   # TAG-ONLY hard gate that runs BEFORE we pack/push anything public. Greps the whole
   # working tree for accidental secrets / private-fabric leakage and FAILS the
@@ -124,7 +151,7 @@ jobs:
   secret-scan:
     stage: publish
     runs-on: ariel
-    needs: [test]
+    needs: [pack]
     rules:
       tags:
         - v*
@@ -149,16 +176,19 @@ jobs:
         fi
         echo "secret-scan: clean"
 
-  # ── publish: TAG-ONLY pack + push to the self-hosted gnostr-cloud NuGet feed ─────
-  # Runs only on a `v*` tag pipeline (no branch rule). Packs BOTH publishable
-  # projects (Sluice + Sluice.TestKit), then pushes with
-  # --skip-duplicate (the feed 409s an existing id+version → treated as skip).
+  # ── publish: TAG-ONLY push to the uranus feed + nuget.org ────────────────────
+  # Runs only on a `v*` tag pipeline (no branch rule). Version = the repo-root
+  # VERSION file (Directory.Build.props), validated as semver — the committed
+  # VERSION is the source of truth, the tag just triggers. Pushes to the
+  # self-hosted uranus feed (gated; GNOSTR_CLOUD_NUGET_TOKEN) and mirrors to
+  # public nuget.org when NUGET_API_KEY is present (soft). --skip-duplicate so a
+  # re-tag at the same version is a no-op (the feed 409s an existing id+version).
   #
-  # Credential: GNOSTR_CLOUD_NUGET_TOKEN — a kind:24242 nuget-push token set once as a
-  # CI secret:
-  #   TOKEN=$(gnostr-cloud-cli --nsec "$NSEC" nuget login-token --host <NUGET_HOST> --expires 90d)
-  #   gnostr-cloud-cli ci set-secret <OWNER_HEX>/sluice GNOSTR_CLOUD_NUGET_TOKEN "$TOKEN"
-  publish-uranus:
+  # Credentials (CI secrets, set once via `gnostr-cloud-cli ci set-secret <OWNER_HEX>/sluice ...`):
+  #   GNOSTR_CLOUD_NUGET_TOKEN — kind:24242 nuget-push token for the uranus feed (REQUIRED)
+  #     TOKEN=$(gnostr-cloud-cli --nsec "$NSEC" nuget login-token --host <NUGET_HOST> --expires 90d)
+  #   NUGET_API_KEY — nuget.org API key (OPTIONAL; absent ⇒ the public mirror is skipped)
+  publish:
     stage: publish
     runs-on: ariel
     needs: [secret-scan]
@@ -172,21 +202,30 @@ jobs:
                DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
                DOTNET_ROOT=/usr/local/dotnet \
                PATH="/usr/local/dotnet:/usr/local/bin:$PATH"
-        : "${GNOSTR_CLOUD_NUGET_TOKEN:?GNOSTR_CLOUD_NUGET_TOKEN secret required — mint with 'gnostr-cloud-cli nuget login-token' and set via 'gnostr-cloud-cli ci set-secret'}"
-        # The runner clones WITHOUT tags, so MinVer can't read the tag — feed it via
-        # MinVerVersionOverride (plain -p:Version is ignored — MinVer wins). This job
-        # is tag-only, so GITHUB_REF_NAME is always the `v<semver>` tag.
-        VER="${GITHUB_REF_NAME#v}"
-        echo "publishing Sluice + Sluice.TestKit $VER"
-        dotnet pack src/Sluice/Sluice.csproj \
-          -c Release -o ./artifacts -p:MinVerVersionOverride="$VER"
-        dotnet pack src/Sluice.TestKit/Sluice.TestKit.csproj \
-          -c Release -o ./artifacts -p:MinVerVersionOverride="$VER"
+        VERSION=$(tr -d '[:space:]' < VERSION 2>/dev/null || true)
+        case "$VERSION" in
+          [0-9]*.[0-9]*.[0-9]*) : ;;
+          *) echo "::error::VERSION file missing or not semver (got '${VERSION:-<empty>}')" >&2; exit 1 ;;
+        esac
+        echo "publishing Sluice + Sluice.TestKit $VERSION"
+        dotnet pack Sluice.slnx -c Release -p:Version="$VERSION" -o ./artifacts
         ls -la ./artifacts
-        dotnet nuget push "./artifacts/*.nupkg" \
-          --source https://<YOUR_NUGET_FEED>/nuget/v3/index.json \
-          --api-key "$GNOSTR_CLOUD_NUGET_TOKEN" \
-          --skip-duplicate
+
+        # Self-hosted uranus feed = "our nuget repository" (the gate). Token is a
+        # kind:24242 nuget-push capability stored NIP-44-encrypted to ariel.
+        : "${GNOSTR_CLOUD_NUGET_TOKEN:?GNOSTR_CLOUD_NUGET_TOKEN secret required — mint with 'gnostr-cloud-cli nuget login-token' and set via 'gnostr-cloud-cli ci set-secret'}"
+        dotnet nuget push ./artifacts/*.nupkg \
+          --source "https://uranus.gnostr.cloud/nuget/v3/index.json" \
+          --api-key "$GNOSTR_CLOUD_NUGET_TOKEN" --skip-duplicate
+
+        # Mirror to public nuget.org only when a key is present (soft).
+        if [ -n "${NUGET_API_KEY:-}" ]; then
+          dotnet nuget push ./artifacts/*.nupkg \
+            --source "https://api.nuget.org/v3/index.json" \
+            --api-key "$NUGET_API_KEY" --skip-duplicate
+        else
+          echo "NUGET_API_KEY not set — skipping the nuget.org mirror"
+        fi
 
   # ── release: TAG-ONLY multi-arch barkd image build + push to the in-cluster registry ──
   # The gVisor `ariel` runner that runs validate/test/publish CANNOT build images (no
