@@ -31,10 +31,20 @@ public sealed class FakeBarkd : IHttpClientFactory
     /// <summary>Simulate barkd being unreachable (every call throws like a refused connection).</summary>
     public bool Down { get; set; }
 
+    /// <summary>When set, every route returns this non-2xx status (with a small error body) — to drive the
+    /// client's "request succeeded transport-wise but barkd rejected it" branches.</summary>
+    public HttpStatusCode? ForceErrorStatus { get; set; }
+
     /// <summary>Spendable balance reported by GET /wallet/balance.</summary>
     public long SpendableSat { get; set; } = 123_456;
 
     public int InvoiceCreateCalls { get; private set; }
+
+    /// <summary>Calls to POST /lightning/pay.</summary>
+    public int PayCalls { get; private set; }
+
+    /// <summary>When true, POST /lightning/pay replies 200 with a non-JSON body (still a success).</summary>
+    public bool PayReturnsNonJson { get; set; }
 
     /// <summary>The payment hash of the most recently created invoice.</summary>
     public string? LastPaymentHash
@@ -72,8 +82,19 @@ public sealed class FakeBarkd : IHttpClientFactory
             throw new HttpRequestException("connection refused (fake barkd is down)");
 
         var path = request.RequestUri!.AbsolutePath;
+        if (ForceErrorStatus is { } forced)
+            return (forced, """{"message":"barkd rejected the request"}""");
+
         lock (_lock)
         {
+            if (request.Method == HttpMethod.Post && path == "/api/v1/lightning/pay")
+            {
+                PayCalls++;
+                return PayReturnsNonJson
+                    ? (HttpStatusCode.OK, "OK")
+                    : (HttpStatusCode.OK, JsonSerializer.Serialize(new { message = "payment sent" }));
+            }
+
             if (request.Method == HttpMethod.Post && path == "/api/v1/lightning/receives/invoice")
             {
                 InvoiceCreateCalls++;

@@ -16,6 +16,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Expose internal members (NwcBridge.DispatchAsync/ParseEvent/InfoEvent) to the unit-test assembly. -->
+    <InternalsVisibleTo Include="Sluice.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="NBitcoin.Secp256k1" />
     <PackageReference Include="Microsoft.Extensions.Http" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />

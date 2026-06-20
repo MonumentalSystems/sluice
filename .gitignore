@@ -23,3 +23,6 @@ coverage.cobertura.xml
 # OS noise
 .DS_Store
 Thumbs.db
+
+# coverage marker file written by scripts/ci/coverage-run.sh
+.gnostr-cloud-ci-output.log

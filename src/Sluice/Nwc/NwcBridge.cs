@@ -206,7 +206,7 @@ public sealed class NwcBridge : BackgroundService
         _log.LogInformation("[nwc] {Method} ← {Pub}", method, evt.Pubkey[..8]);
     }
 
-    private async Task<object> DispatchAsync(string method, JsonElement prm, CancellationToken ct)
+    internal async Task<object> DispatchAsync(string method, JsonElement prm, CancellationToken ct)
     {
         switch (method)
         {
@@ -345,7 +345,7 @@ public sealed class NwcBridge : BackgroundService
     private static long? TryLong(JsonElement prm, string name) =>
         prm.ValueKind == JsonValueKind.Object && prm.TryGetProperty(name, out var v) && v.TryGetInt64(out var n) ? n : null;
 
-    private NostrEvent InfoEvent() => NwcCrypto.Sign(_cfg.PrivateKeyHex, new NostrEvent
+    internal NostrEvent InfoEvent() => NwcCrypto.Sign(_cfg.PrivateKeyHex, new NostrEvent
     {
         CreatedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
         Kind = 13194,
@@ -359,7 +359,7 @@ public sealed class NwcBridge : BackgroundService
     private static async Task SendRawAsync(ClientWebSocket ws, string text, CancellationToken ct) =>
         await ws.SendAsync(Encoding.UTF8.GetBytes(text), WebSocketMessageType.Text, endOfMessage: true, ct);
 
-    private NostrEvent? ParseEvent(JsonElement e)
+    internal NostrEvent? ParseEvent(JsonElement e)
     {
         try
         {

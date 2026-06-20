@@ -17,6 +17,10 @@
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.8" />
     <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.8" />
 
+    <!-- Test-only: concrete DI container + in-memory config provider for the DI/config unit tests. -->
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.8" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="10.0.8" />
+
     <!-- Test set (pinned versions). -->
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.6.0" />
     <PackageVersion Include="xunit" Version="2.9.3" />
