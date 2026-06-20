@@ -164,12 +164,16 @@ jobs:
         # (a leaked internal cluster endpoint). ANY match => fail.
         patterns='BEGIN .*KEY|192\.168\.[0-9]+\.[0-9]+|10\.[0-9]+\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+'
         # Exclude this workflow file itself — it necessarily CONTAINS the patterns it
-        # scans for (the grep needle), which would otherwise self-trip the gate.
+        # scans for (the grep needle) — AND the runner-injected files (NOT repo
+        # content): .gnostr-cloud-ci-context.env carries the internal coverage CAS
+        # host (an RFC1918 IP), and -output.log is the coverage marker sink.
         if grep -RInE -I \
              --exclude-dir=.git \
              --exclude-dir=bin --exclude-dir=obj \
              --exclude-dir=artifacts \
              --exclude='.gnostr-cloud-ci.yml' \
+             --exclude='.gnostr-cloud-ci-context.env' \
+             --exclude='.gnostr-cloud-ci-output.log' \
              "$patterns" . ; then
           echo "::error::secret-scan: forbidden pattern found in the working tree — refusing to publish" >&2
           exit 1
