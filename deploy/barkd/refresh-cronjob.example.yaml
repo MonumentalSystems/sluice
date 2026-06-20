@@ -1,0 +1,61 @@
+# EXAMPLE manifest — adapt the placeholders (namespace, Service DNS name) before applying.
+#
+# SUSPENDED — kept for reference, not running. barkd's background daemon ALREADY participates
+# in Ark rounds automatically and consolidates received (arkoor) VTXOs into trustless in-round VTXOs on its
+# own (observed: a successful auto-round consolidated the wallet without this Job ever firing). Each round
+# carries a small fee (~3 sat), so running this Job on a schedule would just add redundant *paid* rounds on
+# top of what barkd does for free-ish automatically. We rely on the automatic behavior instead.
+#
+# Re-enable only if you want EAGER arkoor-trust removal (convert Lightning receives to in-round sooner than
+# barkd would on its own), accepting the extra round fees: set `suspend: false` and re-apply.
+#
+# Mechanics (when un-suspended): `refresh/counterparty` swaps arkoor receives for trustless in-round VTXOs.
+# An Ark round needs the participating VTXO(s) to total >= 330 sat; below that barkd returns a 4xx that we
+# log but don't fail on (`curl -sS`, not -f). Token: the `barkd-token` key in the `barkd-token` Secret.
+# Apply:  kubectl apply -n <namespace> -f deploy/barkd/refresh-cronjob.example.yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: barkd-refresh
+  namespace: default   # <namespace> — set to the namespace barkd runs in
+  labels:
+    app: barkd
+    component: refresh
+spec:
+  suspend: true # rely on barkd's automatic round participation instead (see the header note)
+  schedule: "0 */6 * * *" # cadence kept for when/if re-enabled (set suspend: false)
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 120
+      template:
+        metadata:
+          labels:
+            app: barkd
+            component: refresh
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: refresh
+              image: curlimages/curl:8.11.0
+              command: ["sh", "-c"]
+              args:
+                - |
+                  echo "refreshing barkd counterparty VTXOs…"
+                  curl -sS -X POST \
+                    "http://barkd.default.svc.cluster.local:3535/api/v1/wallet/refresh/counterparty" \
+                    -H "Authorization: Bearer ${BARKD_TOKEN}"
+                  echo
+              env:
+                - name: BARKD_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: barkd-token
+                      key: barkd-token
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534

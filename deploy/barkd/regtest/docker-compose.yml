@@ -1,0 +1,117 @@
+# Local Ark regtest stack for the gated payments integration tests (the library's IntegrationTests —
+# BARKD_TEST_*). Mirrors bark's own contrib/docker/docker-compose.yml (bitcoind + CLN(hold) +
+# captaind, regtest, same service names + rpcauth so captaind's baked-in config resolves), and adds
+# TWO barkd wallets — merchant (the one the checkout grain talks to) and payer (pays the invoices).
+#
+#   ./regtest.sh up      # start + bootstrap (wallets, funding) + print the BARKD_TEST_* env
+#
+# NOTE: the "second"/"ark" rpcauth pairs below are REGTEST-ONLY throwaway credentials (they match
+# bark's upstream compose so captaind's baked config resolves) — never reuse them anywhere real.
+#
+# See README.md in this directory for what is verified vs best-effort.
+services:
+  bitcoind:
+    image: bitcoin/bitcoin:30.0
+    command: [
+      "bitcoind",
+      "-regtest",
+      "-printtoconsole",
+      "-rpcbind=0.0.0.0",
+      "-rpcallowip=0.0.0.0/0",
+      "-fallbackfee=0.00001",
+      "-server",
+      "-txindex",
+      "-blockfilterindex",
+      "-coinstatsindex",
+      # rpcauth for user "second" password "ark" (same pair bark's upstream compose bakes in;
+      # docker-compose requires the doubled $). REGTEST-ONLY throwaway credentials.
+      "-rpcauth=second:23f161a911aa7a75e5ac78a8d41d5313$$cae8671bb16c4e6ac6fcf3e98195bf0a5de8ee9ec536471df3f5caf97bc16437"
+      ]
+    volumes:
+      - bitcoind:/home/bitcoin/.bitcoin
+    healthcheck:
+      test: ["CMD-SHELL", "bitcoin-cli -regtest -rpcuser=second -rpcpassword=ark -rpcconnect=127.0.0.1 getblockchaininfo || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Core Lightning with Boltz's hold plugin — captaind's Lightning leg (invoice receives/sends).
+  # Published image built from bark's contrib/docker/cln.Dockerfile (entrypoint script honours the
+  # NETWORK/BITCOIN_RPC* env defaults, which match this stack's service names).
+  cln:
+    image: docker.io/secondark/cln-hold:v26.04.1
+    # secondark publishes amd64-only images; on arm64 hosts install qemu binfmt first:
+    #   docker run --privileged --rm tonistiigi/binfmt --install amd64
+    platform: linux/amd64
+    # The cln-grpc plugin self-signs its TLS certs for the container hostname; captaind dials
+    # "https://cln:9736" — the hostname must match or the handshake fails (BadCertificate).
+    hostname: cln
+    restart: on-failure
+    # start.sh touches /root/.lightning/regtest/config before lightningd has created the dir —
+    # pre-create it (the fresh named volume starts empty).
+    entrypoint: ["sh", "-c", "mkdir -p /root/.lightning/regtest && exec /root/cln/start.sh"]
+    volumes:
+      - bitcoind:/root/.bitcoin
+      - cln:/root/.lightning
+    depends_on:
+      bitcoind:
+        condition: service_healthy
+
+  # bark's Ark server. The published image carries its own regtest config at
+  # /root/captaind/captaind.toml wired to the bitcoind/cln/postgres layout of this compose file
+  # (it bundles PostgreSQL in-container, hence the postgres volume).
+  captaind:
+    # NOT the :0.2.3 tag — that image's baked config template is missing a field its own binary
+    # requires (vtxopool.vtxo_target_issue_threshold ⇒ instant crash). :latest is what bark's
+    # upstream compose pins (still captaind 0.2.3, from a later fixed build).
+    image: docker.io/secondark/captaind:latest
+    platform: linux/amd64   # amd64-only upstream image (see the cln note)
+    volumes:
+      - captaind:/data/captaind
+      - postgres:/var/lib/postgresql/data
+      - cln:/data/cln
+      # Overlay the baked template: it's missing the [vtxopool] section the binary requires
+      # (captaind.toml here = the image's own template + upstream's vtxopool defaults).
+      - ./captaind.toml:/root/captaind/captaind.toml:ro
+    ports:
+      - "3535:3535"
+    depends_on:
+      bitcoind:
+        condition: service_healthy
+      cln:
+        condition: service_started
+
+  # The merchant wallet — what the payments module points at (BARKD_TEST_URL).
+  barkd-merchant:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "3635:3535"
+    volumes:
+      - barkd-merchant:/var/lib/bark
+    depends_on:
+      captaind:
+        condition: service_started
+
+  # The payer wallet — funds boarded from the bitcoind faucet; pays the merchant's invoices
+  # (BARKD_TEST_PAYER_URL).
+  barkd-payer:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "3636:3535"
+    volumes:
+      - barkd-payer:/var/lib/bark
+    depends_on:
+      captaind:
+        condition: service_started
+
+volumes:
+  bitcoind:
+  cln:
+  captaind:
+  postgres:
+  barkd-merchant:
+  barkd-payer:

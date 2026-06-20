@@ -1,0 +1,241 @@
+# Main CI pipeline for sluice (.NET 10 library + barkd image) on gnostr-cloud (uranus).
+#
+# Native first-party (GitLab-style) schema parsed by the native CI executor
+# (gnostr-cloud/src/ci/native.rs): top-level `stages:` (ordered) + `variables:`
+# (map) + `jobs:` where each job carries stage / runs-on / needs / rules
+# {branches, tags} / script. The validate + pack/publish jobs run on the in-cluster
+# `ariel` gVisor runner, which ships a .NET 10 SDK natively (no `container:` image
+# needed). The release job runs on the privileged HOST runner `dgx-deploy`.
+#
+# Three CI stages:
+#
+# Stages:
+#   validate (ariel)     format -> build -> test. The `test` job runs only the FAST non-integration
+#                        subset (--filter "Speed!=Slow") as a hard per-push gate. The "Slow" tests
+#                        (Testcontainers / live-barkd integration, tagged [Trait("Speed","Slow")]) are
+#                        NOT run here.
+#   publish (ariel)      TAG-ONLY. A pre-publish SECRET-SCAN gate, then NuGet pack of BOTH
+#                        src/Sluice + src/Sluice.TestKit (MinVer stamps the version from
+#                        the v* tag) + push to the uranus feed.
+#   release (dgx-deploy) TAG-ONLY multi-arch barkd image build + push to the in-cluster registry. Runs
+#                        on the privileged HOST runner (docker + buildx + kubeconfig) because the gVisor
+#                        ariel runner cannot build images. The dgx-deploy runner agent must be a
+#                        `reader` collaborator on this (private) repo or its clone 401s.
+#
+# KEY PATTERN: the validate jobs' rules include BOTH branches:[master] AND tags:[v*],
+# so a tag pipeline still runs the validate stage before the tag-only publish/release stages.
+#
+# Why the validate invocations are safe on ariel: they reuse the /tmp env block (ariel's real $HOME
+# isn't writable in the gVisor sandbox). format/build/test target Sluice.slnx.
+#
+# Enqueue (validate only; signed by the repo owner):
+#   NOSTR_PRIVATE_KEY=$(cat <owner-nsec.hex>) \
+#     gnostr-cloud-cli ci enqueue \
+#       <OWNER_HEX>/sluice \
+#       --workflow .gnostr-cloud-ci.yml --runs-on ariel \
+#       --host <RUNNER_HOST_HEX>
+
+stages:
+  - validate
+  - publish
+  - release
+
+variables:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  format:
+    stage: validate
+    runs-on: ariel
+    # Branch + tag rules: the tag rule keeps the validate stage non-empty for tag
+    # pipelines (so a `v*` tag still validates before publish/release).
+    rules:
+      branches:
+        - master
+      tags:
+        - v*
+    script:
+      - |
+        set -e
+        # ariel runs the step in a gVisor pod with cwd = repo root; its real $HOME
+        # isn't writable, so point HOME / SDK home / nuget cache at /tmp.
+        export HOME=/tmp DOTNET_CLI_HOME=/tmp NUGET_PACKAGES=/tmp/nuget \
+               DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
+               DOTNET_ROOT=/usr/local/dotnet \
+               PATH="/usr/local/dotnet:/usr/local/bin:$PATH"
+        echo "dotnet: $(dotnet --version)"
+        # Whitespace-only verify against the repo's root .editorconfig
+        # (indent/EOL/final-newline/trailing-whitespace). The .NET analogue of
+        # `cargo fmt --all --check`.
+        dotnet format whitespace Sluice.slnx --verify-no-changes
+
+  build:
+    stage: validate
+    runs-on: ariel
+    needs: [format]
+    rules:
+      branches:
+        - master
+      tags:
+        - v*
+    script:
+      - |
+        set -e
+        export HOME=/tmp DOTNET_CLI_HOME=/tmp NUGET_PACKAGES=/tmp/nuget \
+               DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
+               DOTNET_ROOT=/usr/local/dotnet \
+               PATH="/usr/local/dotnet:/usr/local/bin:$PATH"
+        echo "dotnet: $(dotnet --version)"
+        # Canonical build: restore + compile all Ark.* projects in Release.
+        # -m:1 forces a SINGLE in-process MSBuild node (the gVisor sandbox can kill a
+        # parallel worker node mid-build with MSB4166).
+        dotnet build Sluice.slnx -c Release -m:1
+
+  # Fast unit gate: the non-integration subset (Speed!=Slow). The "Slow" tests
+  # (Testcontainers / live-barkd integration, [Trait("Speed","Slow")]) are NOT run
+  # here. Hard gate: a failure reds the stage (and blocks publish/release).
+  test:
+    stage: validate
+    runs-on: ariel
+    needs: [build]
+    rules:
+      branches:
+        - master
+      tags:
+        - v*
+    script:
+      - |
+        set -e
+        export HOME=/tmp DOTNET_CLI_HOME=/tmp NUGET_PACKAGES=/tmp/nuget \
+               DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
+               DOTNET_ROOT=/usr/local/dotnet \
+               PATH="/usr/local/dotnet:/usr/local/bin:$PATH"
+        echo "dotnet: $(dotnet --version)"
+        dotnet test Sluice.slnx -c Release -m:1 \
+          --filter "Speed!=Slow" \
+          --logger "console;verbosity=minimal"
+
+  # ── publish: pre-publish SECRET SCAN ─────────────────────────────────────────
+  # TAG-ONLY hard gate that runs BEFORE we pack/push anything public. Greps the whole
+  # working tree for accidental secrets / private-fabric leakage and FAILS the
+  # pipeline (exit 1) on any hit. This repo is intended to go PUBLIC, so this is the
+  # last line of defence against shipping a key or a fleet-internal coordinate.
+  secret-scan:
+    stage: publish
+    runs-on: ariel
+    needs: [test]
+    rules:
+      tags:
+        - v*
+    script:
+      - |
+        set -euo pipefail
+        echo "pre-publish secret scan (tree-wide)…"
+        # Exclude VCS + build output; scan everything else. -I skips binary files.
+        # We scan for: any PEM private-key header and RFC1918 private-range IPs
+        # (a leaked internal cluster endpoint). ANY match => fail.
+        patterns='BEGIN .*KEY|192\.168\.[0-9]+\.[0-9]+|10\.[0-9]+\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+'
+        # Exclude this workflow file itself — it necessarily CONTAINS the patterns it
+        # scans for (the grep needle), which would otherwise self-trip the gate.
+        if grep -RInE -I \
+             --exclude-dir=.git \
+             --exclude-dir=bin --exclude-dir=obj \
+             --exclude-dir=artifacts \
+             --exclude='.gnostr-cloud-ci.yml' \
+             "$patterns" . ; then
+          echo "::error::secret-scan: forbidden pattern found in the working tree — refusing to publish" >&2
+          exit 1
+        fi
+        echo "secret-scan: clean"
+
+  # ── publish: TAG-ONLY pack + push to the self-hosted gnostr-cloud NuGet feed ─────
+  # Runs only on a `v*` tag pipeline (no branch rule). Packs BOTH publishable
+  # projects (Sluice + Sluice.TestKit), then pushes with
+  # --skip-duplicate (the feed 409s an existing id+version → treated as skip).
+  #
+  # Credential: GNOSTR_CLOUD_NUGET_TOKEN — a kind:24242 nuget-push token set once as a
+  # CI secret:
+  #   TOKEN=$(gnostr-cloud-cli --nsec "$NSEC" nuget login-token --host <NUGET_HOST> --expires 90d)
+  #   gnostr-cloud-cli ci set-secret <OWNER_HEX>/sluice GNOSTR_CLOUD_NUGET_TOKEN "$TOKEN"
+  publish-uranus:
+    stage: publish
+    runs-on: ariel
+    needs: [secret-scan]
+    rules:
+      tags:
+        - v*
+    script:
+      - |
+        set -euo pipefail
+        export HOME=/tmp DOTNET_CLI_HOME=/tmp NUGET_PACKAGES=/tmp/nuget \
+               DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
+               DOTNET_ROOT=/usr/local/dotnet \
+               PATH="/usr/local/dotnet:/usr/local/bin:$PATH"
+        : "${GNOSTR_CLOUD_NUGET_TOKEN:?GNOSTR_CLOUD_NUGET_TOKEN secret required — mint with 'gnostr-cloud-cli nuget login-token' and set via 'gnostr-cloud-cli ci set-secret'}"
+        # The runner clones WITHOUT tags, so MinVer can't read the tag — feed it via
+        # MinVerVersionOverride (plain -p:Version is ignored — MinVer wins). This job
+        # is tag-only, so GITHUB_REF_NAME is always the `v<semver>` tag.
+        VER="${GITHUB_REF_NAME#v}"
+        echo "publishing Sluice + Sluice.TestKit $VER"
+        dotnet pack src/Sluice/Sluice.csproj \
+          -c Release -o ./artifacts -p:MinVerVersionOverride="$VER"
+        dotnet pack src/Sluice.TestKit/Sluice.TestKit.csproj \
+          -c Release -o ./artifacts -p:MinVerVersionOverride="$VER"
+        ls -la ./artifacts
+        dotnet nuget push "./artifacts/*.nupkg" \
+          --source https://<YOUR_NUGET_FEED>/nuget/v3/index.json \
+          --api-key "$GNOSTR_CLOUD_NUGET_TOKEN" \
+          --skip-duplicate
+
+  # ── release: TAG-ONLY multi-arch barkd image build + push to the in-cluster registry ──
+  # The gVisor `ariel` runner that runs validate/test/publish CANNOT build images (no
+  # docker/buildx/cluster access), so this runs on the privileged HOST runner
+  # `dgx-deploy` — a systemd ci-runner with docker + a shared
+  # buildx builder + the k3s kubeconfig. This stage only BUILDS + PUSHES the image;
+  # the deploy rollout stays operator-driven.
+  #
+  # The image contains NO bark source: the Dockerfile downloads + SHA256-verifies the
+  # official upstream barkd release binary at build time (see deploy/barkd/Dockerfile
+  # + NOTICE). The image tag = the git tag minus the leading 'v' (v0.2.5 -> 0.2.5).
+  build-barkd-image:
+    stage: release
+    runs-on: dgx-deploy
+    needs: [test]
+    rules:
+      tags:
+        - v*
+    timeout: 3600
+    variables:
+      KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+    script:
+      - |
+        set -euo pipefail
+        docker --version
+        TAG="${GITHUB_REF_NAME:-}"
+        if [ -z "$TAG" ] && [ -n "${GITHUB_REF:-}" ]; then
+          case "$GITHUB_REF" in refs/tags/*) TAG="${GITHUB_REF#refs/tags/}" ;; esac
+        fi
+        case "$TAG" in
+          v*) TAG="${TAG#v}" ;;
+          *) echo "build-barkd-image refused non-v* ref '$TAG'" >&2; exit 1 ;;
+        esac
+        REG="${SLUICE_REGISTRY:?SLUICE_REGISTRY required — set the in-cluster registry endpoint as a CI variable/secret}"
+        echo "building + pushing barkd:$TAG (multi-arch)"
+        # Multi-arch manifest (the cluster is mixed-arch — amd64 + arm64). The barkd
+        # Dockerfile is self-contained (downloads the upstream release binary), so the
+        # build needs no extra context beyond deploy/barkd.
+        docker buildx build \
+          --platform linux/amd64,linux/arm64 \
+          -t "$REG/barkd:$TAG" \
+          --push \
+          deploy/barkd
+        # Confirm the multi-arch index landed with BOTH arches (a missing per-arch
+        # sub-manifest is the GC failure mode — check the platforms list, not just 200).
+        idx=$(curl -sf -H 'Accept: application/vnd.oci.image.index.v1+json' \
+              "http://$REG/v2/barkd/manifests/$TAG" || true)
+        for arch in amd64 arm64; do
+          echo "$idx" | grep -q "\"architecture\":\"$arch\"" \
+            && echo "  barkd:$TAG has $arch" \
+            || echo "::warning::barkd:$TAG missing $arch in the index"
+        done

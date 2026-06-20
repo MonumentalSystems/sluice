@@ -1,0 +1,99 @@
+# EXAMPLE manifest — adapt the placeholders (namespace, image registry/version, storageClassName)
+# to your own cluster before applying. This is a self-host reference, not a ready-to-apply file.
+#
+# barkd — the Ark/Lightning wallet daemon. Run it cluster-internal only.
+#
+# Single replica + Recreate: the wallet is a sqlite datadir on the PVC — two daemons over the same
+# wallet database would corrupt it, so never surge. Cluster-internal only (NO ingress): anyone with the
+# bearer token controls the funds. See README.md in this directory for the bootstrap (wallet create,
+# token retrieval, mnemonic backup) and maintenance (VTXO refresh) runbook.
+#
+#   kubectl apply -f deploy/barkd/k8s.example.yaml
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: barkd-data
+  namespace: default   # <namespace> — set to the namespace you deploy into
+  labels:
+    app: barkd
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path   # <storage-class> — your cluster's RWO storage class
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: barkd
+  namespace: default   # <namespace>
+  labels:
+    app: barkd
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate   # wallet sqlite — never run two daemons over the same datadir
+  selector:
+    matchLabels:
+      app: barkd
+  template:
+    metadata:
+      labels:
+        app: barkd
+    spec:
+      containers:
+        - name: barkd
+          image: <registry>/barkd:<version>   # e.g. registry.example.com/barkd:0.2.5
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: api
+              containerPort: 3535
+          env:
+            - name: BARKD_BIND_HOST
+              value: "0.0.0.0"
+            - name: BARKD_BIND_PORT
+              value: "3535"
+            # The wallet itself (network=mainnet, ark server, esplora) is created via
+            # POST /api/v1/wallet/create and persists in the datadir — barkd has no network flags.
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/bark
+          livenessProbe:
+            tcpSocket:
+              port: 3535
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /ping        # unauthenticated by design (the only anonymous route)
+              port: 3535
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: barkd-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: barkd
+  namespace: default   # <namespace>
+  labels:
+    app: barkd
+spec:
+  type: ClusterIP
+  selector:
+    app: barkd
+  ports:
+    - name: api
+      port: 3535
+      targetPort: 3535

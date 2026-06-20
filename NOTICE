@@ -1,0 +1,70 @@
+sluice — third-party attribution & licensing notices
+=====================================================
+
+The sluice source in this repository (the `Sluice` / `Sluice.TestKit`
+.NET libraries and the `deploy/barkd` packaging) is licensed under the MIT License
+(see LICENSE). The notices below describe third-party components that sluice
+DEPENDS ON, DOWNLOADS, or INTEROPERATES WITH — these are NOT licensed under
+sluice's MIT License and are governed by their own respective licenses.
+
+
+1. bark / barkd (Ark Labs — Second)
+-----------------------------------
+
+This repository contains NO bark source code. The `deploy/barkd` Docker image does
+not build bark; it DOWNLOADS the OFFICIAL pre-built `barkd` release binary (pinned
+by version and verified by SHA256 against the release's published SHA256SUMS) from
+the upstream bark project at build time:
+
+    https://gitlab.com/ark-bitcoin/bark
+    Releases: https://gitlab.com/ark-bitcoin/bark/-/releases
+    Project home / docs: https://second.tech
+
+bark / barkd is developed and published by Ark Labs / Second and is governed by
+bark's OWN license, NOT by sluice's MIT License:
+
+    https://gitlab.com/ark-bitcoin/bark/-/blob/master/LICENSE
+
+The barkd binary is fetched from the upstream release and run inside the produced
+image; it is NOT redistributed by this repository under the MIT License. sluice
+merely packages and invokes it. Refer to the upstream license for the terms that
+govern the barkd binary itself.
+
+
+2. Regtest stack images
+-----------------------
+
+The local regtest / development stack under `deploy/barkd/regtest` references and
+runs upstream container images that are NOT part of this repository and are
+governed by their own licenses, including:
+
+  - secondark/* (the Ark server / aspd and related components published by
+    Ark Labs / Second) — see https://second.tech and the upstream registries.
+  - bitcoin/bitcoin (Bitcoin Core) — MIT License,
+    https://github.com/bitcoin/bitcoin/blob/master/COPYING
+
+These images are pulled from their upstream sources at runtime; sluice does not
+redistribute them and does not relicense them.
+
+
+3. Protocol implementations & public specifications
+---------------------------------------------------
+
+sluice's protocol code is an independent implementation that follows PUBLIC
+specifications. The specifications themselves are the work of their respective
+authors; following a public spec does not transfer sluice's MIT License to those
+specs:
+
+  - NIP-44 (versioned encryption, v2) — https://github.com/nostr-protocol/nips/blob/master/44.md
+  - NIP-47 / Nostr Wallet Connect (NWC)  — https://github.com/nostr-protocol/nips/blob/master/47.md
+  - NIP-01 (basic protocol / event format) — https://github.com/nostr-protocol/nips/blob/master/01.md
+  - BOLT #11 (Lightning invoice format) — https://github.com/lightning/bolts/blob/master/11-payment-encoding.md
+
+The NIP-44 v2 conformance tests in this repository exercise the OFFICIAL NIP-44 v2
+test vectors published with the NIP-44 specification:
+
+    https://github.com/nostr-protocol/nips/blob/master/44.md
+    Vectors: https://github.com/paulmillr/nip44 (official NIP-44 v2 test vectors)
+
+Credit for those vectors goes to the NIP-44 specification authors and maintainers.
+They are used here solely to verify spec conformance.

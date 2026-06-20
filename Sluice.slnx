@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="src/Sluice/Sluice.csproj" />
+  <Project Path="src/Sluice.TestKit/Sluice.TestKit.csproj" />
+  <Project Path="tests/Sluice.Tests/Sluice.Tests.csproj" />
+  <Project Path="tests/Sluice.IntegrationTests/Sluice.IntegrationTests.csproj" />
+</Solution>

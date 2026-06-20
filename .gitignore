@@ -1,0 +1,25 @@
+# .NET build output
+bin/
+obj/
+artifacts/
+
+# NuGet packages produced into artifacts
+artifacts/*.nupkg
+*.nupkg
+
+# Test results / coverage
+TestResults/
+*.trx
+coverage.*.xml
+coverage.cobertura.xml
+
+# IDE / editor
+.vs/
+.idea/
+*.user
+*.suo
+*.userprefs
+
+# OS noise
+.DS_Store
+Thumbs.db
