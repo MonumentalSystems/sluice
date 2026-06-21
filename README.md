@@ -33,8 +33,19 @@ bark / Ark is developed by **Ark Labs / Second**:
 - https://second.tech
 - https://gitlab.com/ark-bitcoin/bark
 
-> **Status:** this repository is **private during verification** and is **intended
-> to be made public**. Treat anything here as pre-1.0.
+> **Status:** pre-1.0 — treat the API as unstable.
+
+## Clone
+
+```sh
+# via nostr (NIP-34) — resolves the NIP-05 to the repo (needs ngit / git-remote-nostr):
+git clone nostr://info@monumentalsystems.com/sluice
+
+# or the GitHub mirror:
+git clone https://github.com/MonumentalSystems/sluice
+```
+
+The package is on [nuget.org](https://www.nuget.org/packages/Sluice/) — `dotnet add package Sluice`.
 
 ---
 
